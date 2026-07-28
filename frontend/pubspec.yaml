@@ -1,0 +1,49 @@
+name: personal_ai_assistant
+description: A personal AI assistant Flutter application with voice input, data analysis, and Google Workspace integration.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # HTTP and networking
+  http: ^1.1.0
+  
+  # File and storage management
+  path_provider: ^2.1.1
+  
+  # Permissions handling
+  permission_handler: ^11.0.1
+  
+  # Audio recording and playback
+  record: ^7.1.1
+  audioplayers: ^5.2.1
+  
+  # UI enhancements
+  flutter_markdown: ^0.6.18+1
+  google_fonts: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  
+  # Assets configuration (if needed in future)
+  # assets:
+  #   - assets/images/
+  #   - assets/icons/
+  
+  # Fonts configuration (if needed in future)
+  # fonts:
+  #   - family: CustomFont
+  #     fonts:
+  #       - asset: assets/fonts/CustomFont-Regular.ttf
+  #       - asset: assets/fonts/CustomFont-Bold.ttf
+  #         weight: 700
