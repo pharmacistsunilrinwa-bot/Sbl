@@ -87,8 +87,15 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     # 1. Retrieve history context
     context = await gemini_logic_service.get_context(db, request.user_id)
     
-    # 2. Analyze sentiment (non-blocking)
-    asyncio.create_task(asyncio.to_thread(sentiment_service.analyze_text, request.message))
+    # 2. Analyze sentiment (non-blocking, handled safely)
+    async def analyze_sentiment_task(text: str):
+        try:
+            sentiment = await asyncio.to_thread(sentiment_service.analyze_text, text)
+            print(f"Sentiment analysis complete: {sentiment}")
+        except Exception as e:
+            print(f"Sentiment analysis failed: {e}")
+            
+    asyncio.create_task(analyze_sentiment_task(request.message))
     
     # 3. Get reasoned response with context
     response_text = await gemini_logic_service.reasoned_chat(request.message, context)
@@ -100,6 +107,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         response=response_text
     )
     db.add(new_entry)
+    await db.commit() # Explicitly commit changes
     
     return ChatResponse(response=response_text)
 
@@ -112,20 +120,26 @@ async def get_chat_history(user_id: str = "default", db: AsyncSession = Depends(
         .order_by(ChatHistory.timestamp.asc())
     )
     history = result.scalars().all()
-    return [{"role": "user", "content": h.message} if i % 2 == 0 else {"role": "assistant", "content": h.response} 
-            for h in history for i in range(2)]
+    messages = []
+    for h in history:
+        messages.append({"role": "user", "content": h.message})
+        messages.append({"role": "assistant", "content": h.response})
+    return messages
 
 @app.delete("/chat/history")
 async def clear_chat_history(user_id: str = "default", db: AsyncSession = Depends(get_db)):
     from sqlalchemy import delete
     await db.execute(delete(ChatHistory).where(ChatHistory.user_id == user_id))
+    await db.commit() # Explicitly commit deletion
     return {"success": True, "message": "History cleared"}
 
 @app.post("/voice-to-text")
 async def voice_to_text(file: UploadFile = File(...)):
     temp_path = f"voice_{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    def save_file():
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    await asyncio.to_thread(save_file)
     try:
         text = await voice_service.speech_to_text(temp_path)
         return {"text": text}
@@ -133,7 +147,7 @@ async def voice_to_text(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
     finally:
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            await asyncio.to_thread(os.remove, temp_path)
 
 # --- Power Feature: Google Workspace ---
 @app.get("/auth/url")
@@ -148,22 +162,27 @@ async def list_gmail(creds: str):
 @app.post("/analysis/csv")
 async def analyze_csv(file: UploadFile = File(...)):
     temp_path = f"data_{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    def save_file():
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    await asyncio.to_thread(save_file)
     try:
-        report = analysis_service.analyze_csv(temp_path)
+        report = await asyncio.to_thread(analysis_service.analyze_csv, temp_path)
         return report
     finally:
-        os.remove(temp_path)
+        if os.path.exists(temp_path):
+            await asyncio.to_thread(os.remove, temp_path)
 
 # --- Power Feature: File System ---
 @app.get("/files/list")
 async def list_files(path: str = ""):
-    return {"files": file_manager_service.list_files(path)}
+    files = await asyncio.to_thread(file_manager_service.list_files, path)
+    return {"files": files}
 
 @app.post("/files/mkdir")
 async def make_dir(name: str):
-    return {"message": file_manager_service.create_directory(name)}
+    message = await asyncio.to_thread(file_manager_service.create_directory, name)
+    return {"message": message}
 
 @app.post("/tasks/plan", response_model=ProjectPlan)
 async def plan_tasks(request: TaskPlanRequest):

@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
@@ -39,15 +40,19 @@ class GoogleWorkspaceService:
         return flow.credentials
 
     async def list_gmail_messages(self, creds_json):
-        creds = Credentials.from_authorized_user_info(json.loads(creds_json))
-        service = build('gmail', 'v1', credentials=creds)
-        results = service.users().messages().list(userId='me', maxResults=10).execute()
-        return results.get('messages', [])
+        def _sync_list():
+            creds = Credentials.from_authorized_user_info(json.loads(creds_json))
+            service = build('gmail', 'v1', credentials=creds)
+            results = service.users().messages().list(userId='me', maxResults=10).execute()
+            return results.get('messages', [])
+        return await asyncio.to_thread(_sync_list)
 
     async def list_drive_files(self, creds_json):
-        creds = Credentials.from_authorized_user_info(json.loads(creds_json))
-        service = build('drive', 'v3', credentials=creds)
-        results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
-        return results.get('files', [])
+        def _sync_list():
+            creds = Credentials.from_authorized_user_info(json.loads(creds_json))
+            service = build('drive', 'v3', credentials=creds)
+            results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
+            return results.get('files', [])
+        return await asyncio.to_thread(_sync_list)
 
 google_workspace_service = GoogleWorkspaceService()

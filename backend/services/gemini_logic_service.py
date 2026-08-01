@@ -9,18 +9,25 @@ load_dotenv()
 
 class GeminiLogicService:
     def __init__(self):
-        self.keys = os.getenv("GEMINI_KEYS", "").split(",")
+        # Support both GEMINI_KEYS (comma-separated) and GEMINI_API_KEY
+        keys_str = os.getenv("GEMINI_KEYS") or os.getenv("GEMINI_API_KEY") or ""
+        self.keys = [k.strip() for k in keys_str.split(",") if k.strip()]
         self.current_key_index = 0
+        self.model = None
         self.system_instruction = (
             "You are a highly logical Personal AI Assistant. "
             "You excel at pattern recognition, logical reasoning, and step-by-step problem solving. "
             "When presented with data, look for underlying trends. "
             "Always maintain a professional and efficient tone."
         )
-        self._configure_genai()
+        if self.keys:
+            self._configure_genai()
 
     def _configure_genai(self):
-        key = self.keys[self.current_key_index].strip()
+        if not self.keys:
+            return
+            
+        key = self.keys[self.current_key_index]
         genai.configure(api_key=key)
         self.model = genai.GenerativeModel(
             model_name='gemini-1.5-flash',
@@ -28,8 +35,9 @@ class GeminiLogicService:
         )
         
     def rotate_key(self):
-        self.current_key_index = (self.current_key_index + 1) % len(self.keys)
-        self._configure_genai()
+        if len(self.keys) > 1:
+            self.current_key_index = (self.current_key_index + 1) % len(self.keys)
+            self._configure_genai()
 
     async def get_context(self, db: AsyncSession, user_id: str, limit: int = 5):
         result = await db.execute(
@@ -45,13 +53,19 @@ class GeminiLogicService:
         return context
 
     async def reasoned_chat(self, prompt: str, context: str = ""):
+        if not self.model:
+            return "Error: Gemini API key not configured."
+            
         full_prompt = f"Previous conversation:\n{context}\n\nCurrent message: {prompt}" if context else prompt
         try:
             response = await self.model.generate_content_async(full_prompt)
             return response.text
         except Exception as e:
-            print(f"Logic Error with key {self.current_key_index}: {e}. Rotating...")
-            self.rotate_key()
-            return await self.reasoned_chat(prompt, context)
+            if "429" in str(e) and len(self.keys) > 1:
+                print(f"Logic Rate Limited. Rotating...")
+                self.rotate_key()
+                return await self.reasoned_chat(prompt, context)
+            print(f"Logic Error with key {self.current_key_index}: {e}")
+            return f"Error in reasoning: {str(e)}"
 
 gemini_logic_service = GeminiLogicService()

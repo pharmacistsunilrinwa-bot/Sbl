@@ -94,9 +94,56 @@ class _ChatScreenState extends State<ChatScreen> {
     await file.writeAsString(jsonEncode(_messages));
   }
 
+  Future<http.Response> _getWithRetry(Uri url, {int retries = 3}) async {
+    int attempt = 0;
+    while (attempt < retries) {
+      try {
+        final timeoutSec = attempt == 0 ? 45 : 30;
+        return await http.get(url).timeout(Duration(seconds: timeoutSec));
+      } catch (e) {
+        attempt++;
+        if (attempt >= retries) rethrow;
+        await Future.delayed(Duration(milliseconds: 1000 * attempt));
+      }
+    }
+    throw Exception("GET request failed after $retries attempts");
+  }
+
+  Future<http.Response> _postWithRetry(Uri url, {Map<String, String>? headers, Object? body, int retries = 3}) async {
+    int attempt = 0;
+    while (attempt < retries) {
+      try {
+        final timeoutSec = attempt == 0 ? 45 : 30;
+        return await http.post(url, headers: headers, body: body).timeout(Duration(seconds: timeoutSec));
+      } catch (e) {
+        attempt++;
+        if (attempt >= retries) rethrow;
+        await Future.delayed(Duration(milliseconds: 1000 * attempt));
+      }
+    }
+    throw Exception("POST request failed after $retries attempts");
+  }
+
+  Future<http.Response> _multipartWithRetry(String urlStr, String filePath, {int retries = 3}) async {
+    int attempt = 0;
+    while (attempt < retries) {
+      try {
+        final request = http.MultipartRequest("POST", Uri.parse(urlStr));
+        request.files.add(await http.MultipartFile.fromPath("file", filePath));
+        final streamedResponse = await request.send().timeout(attempt == 0 ? const Duration(seconds: 45) : const Duration(seconds: 30));
+        return await http.Response.fromStream(streamedResponse);
+      } catch (e) {
+        attempt++;
+        if (attempt >= retries) rethrow;
+        await Future.delayed(Duration(milliseconds: 1000 * attempt));
+      }
+    }
+    throw Exception("Multipart POST request failed after $retries attempts");
+  }
+
   Future<void> _syncWithServer() async {
     try {
-      final response = await http.get(Uri.parse("$_baseUrl/chat/history?user_id=default"));
+      final response = await _getWithRetry(Uri.parse("$_baseUrl/chat/history?user_id=default"));
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         setState(() {
@@ -134,11 +181,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _saveLocalHistory();
 
     try {
-      final response = await http.post(
+      final response = await _postWithRetry(
         Uri.parse("$_baseUrl/chat"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"message": text, "user_id": "default"}),
-      ).timeout(const Duration(seconds: 30));
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -159,7 +206,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _messages.clear());
     await _saveLocalHistory();
     try {
-      await http.delete(Uri.parse("$_baseUrl/chat/history?user_id=default"));
+      await http.delete(Uri.parse("$_baseUrl/chat/history?user_id=default")).timeout(const Duration(seconds: 15));
     } catch (e) {
       debugPrint("Remote clear failed: $e");
     }
@@ -225,14 +272,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _uploadAudio(String path) async {
     try {
-      final request = http.MultipartRequest("POST", Uri.parse("$_baseUrl/voice-to-text"));
-      request.files.add(await http.MultipartFile.fromPath("file", path));
-      
-      final response = await request.send().timeout(const Duration(seconds: 30));
+      final response = await _multipartWithRetry("$_baseUrl/voice-to-text", path);
       if (response.statusCode == 200) {
-        final resBody = await response.stream.bytesToString();
-        final data = jsonDecode(resBody);
+        final data = jsonDecode(response.body);
         _sendMessage(data["text"]);
+      } else {
+        throw Exception("Server returned status code ${response.statusCode}");
       }
     } catch (e) {
       if (mounted) {
@@ -254,32 +299,15 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
+              key: const PageStorageKey("chat_list"),
               controller: _scrollController,
               padding: const EdgeInsets.all(8.0),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
-                final isUser = msg["role"] == "user";
-                return Align(
-                  alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isUser ? Colors.deepPurple[700] : Colors.grey[850],
-                      borderRadius: BorderRadius.circular(16).copyWith(
-                        bottomRight: isUser ? const Radius.circular(0) : const Radius.circular(16),
-                        bottomLeft: isUser ? const Radius.circular(16) : const Radius.circular(0),
-                      ),
-                    ),
-                    child: MarkdownBody(
-                      data: msg["content"]!,
-                      styleSheet: MarkdownStyleSheet(
-                        p: const TextStyle(color: Colors.white, fontSize: 16),
-                      ),
-                    ),
-                  ),
+                return ChatMessageWidget(
+                  key: ValueKey(msg),
+                  message: msg,
                 );
               },
             ),
@@ -318,6 +346,37 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class ChatMessageWidget extends StatelessWidget {
+  final Map<String, String> message;
+  const ChatMessageWidget({super.key, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final isUser = message["role"] == "user";
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isUser ? Colors.deepPurple[700] : Colors.grey[850],
+          borderRadius: BorderRadius.circular(16).copyWith(
+            bottomRight: isUser ? const Radius.circular(0) : const Radius.circular(16),
+            bottomLeft: isUser ? const Radius.circular(16) : const Radius.circular(0),
+          ),
+        ),
+        child: MarkdownBody(
+          data: message["content"] ?? "",
+          styleSheet: MarkdownStyleSheet(
+            p: const TextStyle(color: Colors.white, fontSize: 16),
+          ),
+        ),
       ),
     );
   }

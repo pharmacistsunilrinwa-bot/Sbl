@@ -1,4 +1,5 @@
 import os
+import asyncio
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
@@ -28,9 +29,11 @@ class GoogleService:
         return auth_url
 
     async def get_gmail_threads(self, credentials_dict):
-        creds = Credentials.from_authorized_user_info(credentials_dict)
-        service = build('gmail', 'v1', credentials=creds)
-        results = service.users().threads().list(userId='me', maxResults=5).execute()
-        return results.get('threads', [])
+        def _sync_list():
+            creds = Credentials.from_authorized_user_info(credentials_dict)
+            service = build('gmail', 'v1', credentials=creds)
+            results = service.users().threads().list(userId='me', maxResults=5).execute()
+            return results.get('threads', [])
+        return await asyncio.to_thread(_sync_list)
 
 google_service = GoogleService()
